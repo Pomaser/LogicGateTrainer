@@ -902,12 +902,37 @@ function drawOverlay(title, subtitle, bonusScore) {
   ctx.fillText(subtitle, W / 2, H / 2 + (bonusScore !== undefined ? 58 : 10));
 }
 
-function renderFrame() {
-  const circuit = LEVELS[state.levelIndex].circuit;
-  const { gateOut, output } = evaluateCircuit(circuit, buildInputMap());
+function drawStartScreen() {
+  ctx.fillStyle = C.cursor;
+  ctx.font = 'bold 36px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Logic Gate Trainer', W / 2, H / 2 - 70);
 
+  ctx.fillStyle = C.dim;
+  ctx.font = '15px monospace';
+  ctx.fillText('Set the inputs so the output = 1', W / 2, H / 2 - 15);
+  ctx.fillText('1 / T = True     0 / F = False', W / 2, H / 2 + 15);
+  ctx.fillText('20 levels — AND · OR · NAND · NOR', W / 2, H / 2 + 45);
+
+  if (Math.floor(Date.now() / 600) % 2 === 0) {
+    ctx.fillStyle = C.true;
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('Press any key to start', W / 2, H / 2 + 100);
+  }
+}
+
+function renderFrame() {
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
+
+  if (state.phase === 'START_SCREEN') {
+    drawStartScreen();
+    return;
+  }
+
+  const circuit = LEVELS[state.levelIndex].circuit;
+  const { gateOut, output } = evaluateCircuit(circuit, buildInputMap());
 
   drawTimeBar();
   drawStatusLine(output, gateOut);
@@ -980,6 +1005,10 @@ function gameLoop(ts) {
 // KEYBOARD INPUT
 // ═══════════════════════════════════════════════════════
 document.addEventListener('keydown', (e) => {
+  if (state.phase === 'START_SCREEN') {
+    startLevel(0);
+    return;
+  }
   if (state.phase === 'PLAYING') {
     if (e.key === '1' || e.key === 't' || e.key === 'T') { setCurrentInput(true);  advanceCursor(); }
     if (e.key === '0' || e.key === 'f' || e.key === 'F') { setCurrentInput(false); advanceCursor(); }
@@ -1010,7 +1039,7 @@ function saveScreenshot() {
 // ═══════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════
-startLevel(0);
+state = { phase: 'START_SCREEN', totalScore: 0, lastTimestamp: null, flashMsg: null, flashTimer: 0 };
 requestAnimationFrame(gameLoop);
 </script>
 </body>
