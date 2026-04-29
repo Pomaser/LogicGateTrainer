@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Logic Gate Trainer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-family: 'Courier New', monospace;
+  color: #c9d1d9;
+}
+#hud {
+  width: 840px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 14px;
+  color: #8b949e;
+}
+#hud span { min-width: 200px; }
+#hud #levelLabel { color: #58a6ff; font-weight: bold; }
+#hud #scoreLabel { text-align: right; color: #3fb950; }
+#hud #cycleLabel { text-align: center; }
+canvas { border: 1px solid #21262d; display: block; }
+#keys {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #484f58;
+}
+#keys kbd {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: #8b949e;
+}
+</style>
+</head>
+<body>
+<div id="hud">
+  <span id="levelLabel">Level 1</span>
+  <span id="cycleLabel">Cycles: 0</span>
+  <span id="scoreLabel">Score: 0</span>
+</div>
+<canvas id="gameCanvas" width="840" height="520"></canvas>
+<div id="keys">
+  <kbd>1</kbd> / <kbd>T</kbd> = True &nbsp; <kbd>0</kbd> / <kbd>F</kbd> = False &nbsp;
+  <kbd>Enter</kbd> = restart after game over
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════
+const W = 840, H = 520;
+const TIMEBAR_H = 24;
+const CIRCUIT_TOP = 56;
+const CIRCUIT_H = H - CIRCUIT_TOP - 24;
+const PAD_X = 120;          // left/right margin — must leave room for labels
+const GATE_W = 80;
+const SPINNER_GAP = 10;     // minimum gap between adjacent spinners (px)
+const WIRE_OUT = 28;        // output stub length
+const WIRE_IN = 36;         // input stub length (from gate left edge)
+const BUBBLE_R = 5;
+const PIN_R = 7;
+const CURSOR_R = 13;
+
+const C = {
+  bg:       '#0d1117',
+  true:     '#3fb950',
+  false:    '#f85149',
+  unset:    '#484f58',
+  gate_bg:  '#161b22',
+  gate_str: '#58a6ff',
+  cursor:   '#e3b341',
+  text:     '#c9d1d9',
+  dim:      '#8b949e',
+  grid:     '#21262d',
+};
+
+// ═══════════════════════════════════════════════════════
+// LEVEL DEFINITIONS
+// ═══════════════════════════════════════════════════════
+const LEVELS = [
+  // 1: AND, 2 inputs — solution: A=1, B=1
+  {
+    label: 'Level 1 — AND (2 inputs)', timeLimit: 30, cursorPause: 5, cm: 1.0,
+    circuit: { outputGateId: 'g0', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 2: OR, 3 inputs — solution: any one input = 1
+  {
+    label: 'Level 2 — OR (3 inputs)', timeLimit: 30, cursorPause: 5, cm: 1.2,
+    circuit: { outputGateId: 'g0', gates: [
+      { id:'g0', type:'OR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 3: AND, 3 inputs, 1 negation — solution: A=0, B=1, C=1
+  {
+    label: 'Level 3 — AND + negation', timeLimit: 25, cursorPause: 5, cm: 1.4,
+    circuit: { outputGateId: 'g0', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 4: g0=AND(A,B), g1=OR(g0,C) — řešení: A=1, B=1
+  {
+    label: 'Level 4 — 2 gates in series', timeLimit: 40, cursorPause: 4, cm: 1.6,
+    circuit: { outputGateId: 'g1', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'OR', inputs: [
+        { source:'g0',  negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 5: g0=OR(A,B), g1=AND(C,D), g2=AND(g0,g1) — řešení: A=1, C=1, D=1
+  {
+    label: 'Level 5 — 2 gates in parallel', timeLimit: 45, cursorPause: 4, cm: 1.8,
+    circuit: { outputGateId: 'g2', gates: [
+      { id:'g0', type:'OR',  inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+    ]},
+  },
+  // 6: g0=AND(¬A,B), g1=AND(g0,C) — řešení: A=0, B=1, C=1
+  {
+    label: 'Level 6 — negated inputs', timeLimit: 35, cursorPause: 4, cm: 2.0,
+    circuit: { outputGateId: 'g1', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'AND', inputs: [
+        { source:'g0',  negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 7: g0=AND(A,B), g1=OR(C,D), g2=AND(g0,g1) — řešení: A=1, B=1, C=1
+  {
+    label: 'Level 7 — 3 gates (tree)', timeLimit: 50, cursorPause: 3, cm: 2.4,
+    circuit: { outputGateId: 'g2', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'OR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+    ]},
+  },
+  // 8: g0=AND(¬A,B), g1=OR(C,¬D), g2=AND(g0,g1) — solution: A=0, B=1, D=0
+  //    allFalse: g0=AND(1,0)=0, g1=OR(0,1)=1, g2=AND(0,1)=0 ✓
+  {
+    label: 'Level 8 — 3 gates + negation', timeLimit: 50, cursorPause: 3, cm: 2.6,
+    circuit: { outputGateId: 'g2', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'OR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:true  },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0',  negated:false },
+        { source:'g1',  negated:false },
+      ]},
+    ]},
+  },
+  // 9: g0=AND(¬A,B), g1=OR(C,¬D), g2=AND(g0,g1), g3=OR(g2,E)
+  //    solution: A=0, B=1, C=1 → g0=1, g1=1, g2=1, g3=1
+  {
+    label: 'Level 9 — 4 gates, 3 negations', timeLimit: 60, cursorPause: 3, cm: 3.0,
+    circuit: { outputGateId: 'g3', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'OR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:true  },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+      { id:'g3', type:'OR', inputs: [
+        { source:'g2',  negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 10: g0=AND(¬A,¬B), g1=AND(C,D), g2=AND(g0,g1), g3=OR(¬E,F), g4=AND(g2,g3)
+  //     allFalse: g0=1,g1=0,g2=0,g3=1,g4=AND(0,1)=0 ✓
+  //     solution: A=0,B=0,C=1,D=1,E=0 → g0=1,g1=1,g2=1,g3=1,g4=1
+  {
+    label: 'Level 10 — Final Challenge', timeLimit: 60, cursorPause: 3, cm: 3.5,
+    circuit: { outputGateId: 'g4', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:true },
+        { source:'user', negated:true },
+      ]},
+      { id:'g1', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+      { id:'g3', type:'OR', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+      ]},
+      { id:'g4', type:'AND', inputs: [
+        { source:'g2', negated:false },
+        { source:'g3', negated:false },
+      ]},
+    ]},
+  },
+  // 11: NAND, 2 inputs — solution: A=0 (or B=0)
+  {
+    label: 'Level 11 — NAND (2 inputs)', timeLimit: 25, cursorPause: 4, cm: 4.0,
+    circuit: { outputGateId: 'g0', gates: [
+      { id:'g0', type:'NAND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 12: NOR, 2 inputs — solution: A=0, B=0
+  {
+    label: 'Level 12 — NOR (2 inputs)', timeLimit: 25, cursorPause: 4, cm: 4.2,
+    circuit: { outputGateId: 'g0', gates: [
+      { id:'g0', type:'NOR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 13: NAND, 3 inputs, 1 negation — solution: A=1 (¬A=0 → NAND=1)
+  {
+    label: 'Level 13 — NAND + negation', timeLimit: 25, cursorPause: 3, cm: 4.6,
+    circuit: { outputGateId: 'g0', gates: [
+      { id:'g0', type:'NAND', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 14: g0=NAND(A,B), g1=AND(g0,C) — řešení: A=0, C=1
+  {
+    label: 'Level 14 — NAND → AND', timeLimit: 40, cursorPause: 3, cm: 5.0,
+    circuit: { outputGateId: 'g1', gates: [
+      { id:'g0', type:'NAND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'AND', inputs: [
+        { source:'g0',  negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 15: g0=AND(A,B), g1=NAND(C,D), g2=NOR(g0,g1)
+  //     solution: A=0 → g0=0; C=1,D=1 → g1=NAND(1,1)=0; g2=NOR(0,0)=1
+  {
+    label: 'Level 15 — AND + NAND → NOR', timeLimit: 50, cursorPause: 3, cm: 5.5,
+    circuit: { outputGateId: 'g2', gates: [
+      { id:'g0', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'NAND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'NOR', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+    ]},
+  },
+  // 16: g0=NOR(A,B), g1=AND(g0,C) — řešení: A=0,B=0,C=1
+  {
+    label: 'Level 16 — NOR → AND', timeLimit: 35, cursorPause: 3, cm: 5.8,
+    circuit: { outputGateId: 'g1', gates: [
+      { id:'g0', type:'NOR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'AND', inputs: [
+        { source:'g0',  negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+  // 17: g0=NAND(A,B), g1=NOR(C,D), g2=AND(g0,g1) — řešení: A=0,C=0,D=0
+  {
+    label: 'Level 17 — NAND + NOR → AND', timeLimit: 45, cursorPause: 3, cm: 6.2,
+    circuit: { outputGateId: 'g2', gates: [
+      { id:'g0', type:'NAND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'NOR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+    ]},
+  },
+  // 18: g0=NOR(¬A,B), g1=NAND(C,¬D), g2=AND(g0,g1)
+  //     solution: A=1,B=0 → g0=NOR(0,0)=1; D=1 → g1=NAND(C,0)=1; g2=1
+  {
+    label: 'Level 18 — negation + NOR + NAND', timeLimit: 45, cursorPause: 3, cm: 6.8,
+    circuit: { outputGateId: 'g2', gates: [
+      { id:'g0', type:'NOR', inputs: [
+        { source:'user', negated:true  },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'NAND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:true  },
+      ]},
+      { id:'g2', type:'AND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+    ]},
+  },
+  // 19: g0=NAND(A,B), g1=NOR(C,D), g2=NAND(g0,E), g3=AND(g1,g2)
+  //     solution: A=0,C=0,D=0,E=0 → g0=1,g1=1,g2=NAND(1,0)=1,g3=1
+  {
+    label: 'Level 19 — 4 gates, NAND+NOR', timeLimit: 60, cursorPause: 3, cm: 7.5,
+    circuit: { outputGateId: 'g3', gates: [
+      { id:'g0', type:'NAND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'NOR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'NAND', inputs: [
+        { source:'g0',  negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g3', type:'AND', inputs: [
+        { source:'g1', negated:false },
+        { source:'g2', negated:false },
+      ]},
+    ]},
+  },
+  // 20: g0=NOR(A,B), g1=AND(C,D), g2=NAND(g0,g1), g3=NOR(g2,E)
+  //     solution: A=0,B=0,C=1,D=1,E=0 → g0=1,g1=1,g2=NAND(1,1)=0,g3=NOR(0,0)=1
+  {
+    label: 'Level 20 — Grand Challenge', timeLimit: 70, cursorPause: 3, cm: 8.5,
+    circuit: { outputGateId: 'g3', gates: [
+      { id:'g0', type:'NOR', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g1', type:'AND', inputs: [
+        { source:'user', negated:false },
+        { source:'user', negated:false },
+      ]},
+      { id:'g2', type:'NAND', inputs: [
+        { source:'g0', negated:false },
+        { source:'g1', negated:false },
+      ]},
+      { id:'g3', type:'NOR', inputs: [
+        { source:'g2',  negated:false },
+        { source:'user', negated:false },
+      ]},
+    ]},
+  },
+];
+
+// ═══════════════════════════════════════════════════════
+// CIRCUIT EVALUATOR
+// ═══════════════════════════════════════════════════════
+function evaluateCircuit(circuit, inputMap) {
+  const gateOut = new Map();
+  for (const gate of circuit.gates) {
+    const vals = gate.inputs.map((pin, i) => {
+      let raw;
+      if (pin.source === 'user') {
+        const v = inputMap.get(gate.id + ':' + i);
+        raw = v !== undefined ? v : null;   // null = undetermined
+      } else {
+        const v = gateOut.get(pin.source);
+        raw = v !== undefined ? v : null;
+      }
+      if (raw === null) return null;
+      return pin.negated ? !raw : raw;
+    });
+    // If any input is undetermined, output is also undetermined
+    let out;
+    if (vals.some(v => v === null)) {
+      out = null;
+    } else {
+      const base = (gate.type === 'AND' || gate.type === 'NAND')
+        ? vals.every(Boolean)
+        : vals.some(Boolean);
+      out = (gate.type === 'NAND' || gate.type === 'NOR') ? !base : base;
+    }
+    gateOut.set(gate.id, out);
+  }
+  const output = gateOut.get(circuit.outputGateId);
+  return { gateOut, output: output === true };
+}
+
+// ═══════════════════════════════════════════════════════
+// LAYOUT ENGINE
+// ═══════════════════════════════════════════════════════
+function gateHeight(gate) {
+  // Height derived from spinner: each input gets spinner diameter + gap
+  const pinSpacing = 2 * CURSOR_R + SPINNER_GAP;
+  return pinSpacing * (gate.inputs.length + 1);
+}
+
+function computeLayout(circuit) {
+  const gates = circuit.gates;
+
+  // Assign columns (DAG depth)
+  const colMap = new Map();
+  function assignCol(id) {
+    if (colMap.has(id)) return colMap.get(id);
+    const gate = gates.find(g => g.id === id);
+    let maxSrc = -1;
+    for (const pin of gate.inputs) {
+      if (pin.source !== 'user') maxSrc = Math.max(maxSrc, assignCol(pin.source));
+    }
+    const col = maxSrc + 1;
+    colMap.set(id, col);
+    return col;
+  }
+  for (const g of gates) assignCol(g.id);
+
+  const maxCol = Math.max(...colMap.values());
+
+  // Group gates into columns (preserve order from list)
+  const colGroups = new Map();
+  for (const g of gates) {
+    const c = colMap.get(g.id);
+    if (!colGroups.has(c)) colGroups.set(c, []);
+    colGroups.get(c).push(g.id);
+  }
+
+  // X position for a column — circuit centered horizontally
+  const COL_SPACING = GATE_W + WIRE_OUT + WIRE_IN + 28;  // spacing between column centers
+  const circuitW = maxCol * COL_SPACING + GATE_W;
+  const originX  = (W - circuitW) / 2 + GATE_W / 2;
+  const colX = (col) => originX + col * COL_SPACING;
+
+  // Gate positions — fixed gap between gates, block centered vertically
+  const GATE_GAP = 14;   // gap between gates in a column (px)
+  const gatePos = new Map();
+  for (const [col, ids] of colGroups) {
+    const x = colX(col);
+    const heights = ids.map(id => gateHeight(gates.find(g => g.id === id)));
+    const totalH = heights.reduce((s, h) => s + h, 0) + GATE_GAP * (ids.length - 1);
+    let y = CIRCUIT_TOP + (CIRCUIT_H - totalH) / 2 + heights[0] / 2;
+    ids.forEach((id, i) => {
+      gatePos.set(id, { x, y });
+      if (i + 1 < ids.length) y += heights[i] / 2 + GATE_GAP + heights[i + 1] / 2;
+    });
+  }
+
+  // User inputs (cursor-addressable pins)
+  const userPins = [];
+  for (const gate of gates) {
+    const gp = gatePos.get(gate.id);
+    const gh = gateHeight(gate);
+    gate.inputs.forEach((pin, i) => {
+      if (pin.source === 'user') {
+        const pinY = gp.y - gh / 2 + (i + 1) * gh / (gate.inputs.length + 1);
+        userPins.push({ gateId: gate.id, pinIndex: i, x: gp.x - GATE_W / 2 - WIRE_IN, y: pinY, negated: pin.negated });
+      }
+    });
+  }
+
+  return { gatePos, userPins, colMap, colX, maxCol };
+}
+
+// ═══════════════════════════════════════════════════════
+// GAME STATE
+// ═══════════════════════════════════════════════════════
+let state = { totalScore: 0 };
+let currentLayout = null;
+let inputMap = new Map();
+let userPins = [];
+
+function pinKey(gateId, pinIndex) { return gateId + ':' + pinIndex; }
+
+function buildInputMap() { return new Map(inputMap); }
+
+function startLevel(idx) {
+  const lvl = LEVELS[idx];
+  currentLayout = computeLayout(lvl.circuit);
+  userPins = currentLayout.userPins;
+  inputMap = new Map();
+
+  state = {
+    phase: 'PLAYING',
+    levelIndex: idx,
+    totalScore: state.totalScore,
+    levelScore: 0,
+    cursorIndex: 0,
+    cursorTimer: lvl.cursorPause,
+    cycleCount: 0,
+    timeRemaining: lvl.timeLimit,
+    lastTimestamp: null,
+    blinkPhase: 0,
+    circuitOutput: false,
+    completionDelay: 0,
+    flashMsg: state.flashMsg || null,
+    flashTimer: state.flashTimer || 0,
+  };
+
+  document.getElementById('levelLabel').textContent = lvl.label;
+  refreshHUD();
+}
+
+function setCurrentInput(val) {
+  const pin = userPins[state.cursorIndex];
+  if (pin) inputMap.set(pinKey(pin.gateId, pin.pinIndex), val);
+}
+
+function advanceCursor() {
+  state.cursorIndex = (state.cursorIndex + 1) % userPins.length;
+  if (state.cursorIndex === 0) state.cycleCount++;
+  state.cursorTimer = LEVELS[state.levelIndex].cursorPause;
+}
+
+function completedLevel() {
+  const lvl = LEVELS[state.levelIndex];
+  const timeFrac = Math.max(0, state.timeRemaining / lvl.timeLimit);
+  const pen = [1.0, 0.8, 0.6, 0.4][Math.min(state.cycleCount, 3)];
+  state.levelScore = Math.floor(1000 * lvl.cm * timeFrac * pen);
+  state.totalScore += state.levelScore;
+  state.phase = 'LEVEL_COMPLETE';
+  state.completionDelay = 2.5;
+  refreshHUD();
+}
+
+function advanceLevel() {
+  const nextIdx = state.levelIndex + 1;
+  if (nextIdx >= LEVELS.length) {
+    state.phase = 'GAME_OVER';
+  } else {
+    const savedScore = state.totalScore;
+    startLevel(nextIdx);
+    state.totalScore = savedScore;
+    refreshHUD();
+  }
+}
+
+function refreshHUD() {
+  document.getElementById('cycleLabel').textContent = 'Cycles: ' + state.cycleCount;
+  document.getElementById('scoreLabel').textContent = 'Score: ' + state.totalScore;
+}
+
+// ═══════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════
+function lerpColor(a, b, t) {
+  const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
+  const ar = (ah>>16)&0xff, ag = (ah>>8)&0xff, ab = ah&0xff;
+  const br = (bh>>16)&0xff, bg = (bh>>8)&0xff, bb = bh&0xff;
+  const r = Math.round(ar + (br-ar)*t).toString(16).padStart(2,'0');
+  const g = Math.round(ag + (bg-ag)*t).toString(16).padStart(2,'0');
+  const bv= Math.round(ab + (bb-ab)*t).toString(16).padStart(2,'0');
+  return '#' + r + g + bv;
+}
+
+function wireCol(val) {
+  if (val === true)  return C.true;
+  if (val === false) return C.false;
+  return C.unset;
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDERER
+// ═══════════════════════════════════════════════════════
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function drawTimeBar() {
+  const lvl = LEVELS[state.levelIndex];
+  const frac = Math.max(0, state.timeRemaining / lvl.timeLimit);
+  const bx = 10, by = 6, bw = W - 20, bh = 14;
+  const color = frac > 0.5
+    ? lerpColor(C.true, '#e3b341', (1 - frac) * 2)
+    : lerpColor('#e3b341', C.false, (0.5 - frac) * 2);
+
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.fillStyle = color;
+  ctx.fillRect(bx, by, bw * frac, bh);
+  ctx.strokeStyle = C.grid;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by, bw, bh);
+
+  ctx.fillStyle = C.dim;
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(Math.ceil(state.timeRemaining) + 's', W / 2, by + bh / 2);
+}
+
+function drawNegBubble(x, y, col) {
+  ctx.beginPath();
+  ctx.arc(x, y, BUBBLE_R, 0, Math.PI * 2);
+  ctx.fillStyle = C.bg;
+  ctx.fill();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+function gateOutputEdgeX(gate, gp) {
+  const extra = (gate.type === 'NAND' || gate.type === 'NOR') ? BUBBLE_R * 2 : 0;
+  return gp.x + GATE_W / 2 + extra;
+}
+
+function drawWires(circuit, gateOut) {
+  const { gatePos } = currentLayout;
+
+  for (const gate of circuit.gates) {
+    const gp = gatePos.get(gate.id);
+    const gh = gateHeight(gate);
+
+    gate.inputs.forEach((pin, i) => {
+      const pinY = gp.y - gh / 2 + (i + 1) * gh / (gate.inputs.length + 1);
+      const gateInX = gp.x - GATE_W / 2;   // levý okraj hradla
+
+      // Wire value
+      let val;
+      if (pin.source === 'user') {
+        const v = inputMap.get(pinKey(gate.id, i));
+        val = v !== undefined ? v : null;
+      } else {
+        const v = gateOut.get(pin.source);
+        val = v !== undefined ? v : null;
+      }
+      const col = wireCol(val);
+
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+
+      if (pin.source === 'user') {
+        // Wire from user pin to gate
+        const pinX = gateInX - WIRE_IN;
+        ctx.beginPath();
+        ctx.moveTo(pinX, pinY);
+        ctx.lineTo(gateInX, pinY);
+        ctx.stroke();
+        if (pin.negated) {
+          drawNegBubble(gateInX - BUBBLE_R - 1, pinY, col);
+        }
+      } else {
+        // Wire from source gate output to this input
+        const srcGp   = gatePos.get(pin.source);
+        const srcGate = circuit.gates.find(g => g.id === pin.source);
+        const srcOutX = gateOutputEdgeX(srcGate, srcGp);
+        const srcY    = srcGp.y;
+        const junctionX = srcOutX + WIRE_OUT;
+
+        ctx.beginPath();
+        ctx.moveTo(srcOutX, srcY);
+        ctx.lineTo(junctionX, srcY);
+        ctx.lineTo(junctionX, pinY);
+        ctx.lineTo(gateInX,   pinY);
+        ctx.stroke();
+        if (pin.negated) {
+          drawNegBubble(gateInX - BUBBLE_R - 1, pinY, col);
+        }
+      }
+    });
+
+    // Output stub (starts after bubble for NAND/NOR)
+    const outVal  = gateOut.get(gate.id);
+    const outCol  = wireCol(outVal !== undefined ? outVal : null);
+    const outEdgeX = gateOutputEdgeX(gate, gp);
+    ctx.strokeStyle = outCol;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(outEdgeX, gp.y);
+    ctx.lineTo(outEdgeX + WIRE_OUT, gp.y);
+    ctx.stroke();
+
+    // Output dot for final gate
+    if (gate.id === circuit.outputGateId) {
+      const dotX = outEdgeX + WIRE_OUT + 8;
+      ctx.fillStyle = outCol;
+      ctx.beginPath();
+      ctx.arc(dotX, gp.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = C.bg;
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(outVal ? '1' : '0', dotX, gp.y);
+    }
+  }
+}
+
+function drawGates(circuit, gateOut) {
+  const { gatePos } = currentLayout;
+
+  for (const gate of circuit.gates) {
+    const gp = gatePos.get(gate.id);
+    const gh = gateHeight(gate);
+    const x0 = gp.x - GATE_W / 2;
+    const y0 = gp.y - gh / 2;
+
+    // Body
+    ctx.fillStyle = C.gate_bg;
+    ctx.fillRect(x0, y0, GATE_W, gh);
+    ctx.strokeStyle = C.gate_str;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x0, y0, GATE_W, gh);
+
+    // Negation bubbles on output for NAND/NOR
+    if (gate.type === 'NAND' || gate.type === 'NOR') {
+      const bx = x0 + GATE_W + BUBBLE_R;
+      ctx.beginPath();
+      ctx.arc(bx, gp.y, BUBBLE_R, 0, Math.PI * 2);
+      ctx.fillStyle = C.gate_bg;
+      ctx.fill();
+      ctx.strokeStyle = C.gate_str;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Label — upper right corner (IEC standard)
+    ctx.fillStyle = C.gate_str;
+    ctx.font = 'bold 39px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    const label = (gate.type === 'AND' || gate.type === 'NAND') ? '&' : '≥1';
+    ctx.fillText(label, x0 + GATE_W - 5, y0 + 4);
+
+    // Input stubs (internal)
+    gate.inputs.forEach((_, i) => {
+      const py = gp.y - gh / 2 + (i + 1) * gh / (gate.inputs.length + 1);
+      ctx.strokeStyle = '#2d333b';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x0, py);
+      ctx.lineTo(x0 + 10, py);
+      ctx.stroke();
+    });
+  }
+}
+
+function drawUserPins(circuit) {
+  userPins.forEach((pin, idx) => {
+    const isActive = state.phase === 'PLAYING' && idx === state.cursorIndex;
+    const key = pinKey(pin.gateId, pin.pinIndex);
+    const val = inputMap.get(key);
+    const col = val === undefined ? C.unset : (val ? C.true : C.false);
+
+    // Label (letter A, B, C...) — offset past spinner
+    ctx.fillStyle = isActive ? C.cursor : C.dim;
+    ctx.font = (isActive ? 'bold ' : '') + '12px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String.fromCharCode(65 + idx), pin.x - CURSOR_R - 10, pin.y);
+
+    // Spinner — shrinking arc showing remaining time on this input
+    if (isActive) {
+      const lvl = LEVELS[state.levelIndex];
+      const frac = Math.max(0, state.cursorTimer / lvl.cursorPause);
+      const startAngle = -Math.PI / 2;
+
+      // Background (full ring, dim)
+      ctx.strokeStyle = '#2d333b';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(pin.x, pin.y, CURSOR_R, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Remaining time — arc clockwise
+      if (frac > 0.005) {
+        const spinCol = frac > 0.4 ? C.cursor : C.false;  // yellow → red when time is low
+        ctx.strokeStyle = spinCol;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.arc(pin.x, pin.y, CURSOR_R, startAngle, startAngle + 2 * Math.PI * frac);
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+      }
+    }
+
+    // Pin circle
+    ctx.fillStyle = val === true ? C.true + '22' : C.bg;
+    ctx.strokeStyle = isActive ? C.cursor : col;
+    ctx.lineWidth = isActive ? 1.5 : 1.5;
+    ctx.beginPath();
+    ctx.arc(pin.x, pin.y, PIN_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Value in circle (? = unset, 0/1 = set)
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (val === undefined) {
+      ctx.fillStyle = isActive ? C.cursor : C.dim;
+      ctx.fillText('?', pin.x, pin.y);
+    } else {
+      ctx.fillStyle = val ? C.true : C.false;
+      ctx.fillText(val ? '1' : '0', pin.x, pin.y);
+    }
+  });
+}
+
+function drawStatusLine(output, gateOut) {
+  ctx.fillStyle = C.dim;
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Output:', 12, TIMEBAR_H + 4);
+  const outVal = gateOut.get(LEVELS[state.levelIndex].circuit.outputGateId);
+  ctx.fillStyle = outVal === true ? C.true : outVal === false ? C.false : C.dim;
+  ctx.fillText(outVal === true ? '1  ✓' : outVal === false ? '0' : '?', 70, TIMEBAR_H + 4);
+
+  ctx.fillStyle = C.dim;
+  ctx.textAlign = 'right';
+  ctx.fillText('step: ' + LEVELS[state.levelIndex].cursorPause + 's', W - 12, TIMEBAR_H + 4);
+}
+
+function drawOverlay(title, subtitle, bonusScore) {
+  ctx.fillStyle = 'rgba(13,17,23,0.84)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = C.cursor;
+  ctx.font = 'bold 30px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(title, W / 2, H / 2 - 36);
+
+  if (bonusScore !== undefined) {
+    ctx.fillStyle = C.true;
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('+' + bonusScore + ' pts', W / 2, H / 2 + 2);
+    ctx.fillStyle = C.dim;
+    ctx.font = '14px monospace';
+    ctx.fillText('Total score: ' + state.totalScore, W / 2, H / 2 + 28);
+  }
+
+  ctx.fillStyle = C.dim;
+  ctx.font = '14px monospace';
+  ctx.fillText(subtitle, W / 2, H / 2 + (bonusScore !== undefined ? 58 : 10));
+}
+
+function renderFrame() {
+  const circuit = LEVELS[state.levelIndex].circuit;
+  const { gateOut, output } = evaluateCircuit(circuit, buildInputMap());
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  drawTimeBar();
+  drawStatusLine(output, gateOut);
+  drawWires(circuit, gateOut);
+  drawGates(circuit, gateOut);
+  drawUserPins(circuit);
+
+  if (state.phase === 'LEVEL_COMPLETE') {
+    const isLast = state.levelIndex >= LEVELS.length - 1;
+    const secs = Math.ceil(Math.max(0, state.completionDelay));
+    const sub = isLast
+      ? 'Congratulations! Continuing in ' + secs + 's...'
+      : 'Next level in ' + secs + 's  (any key = skip)';
+    drawOverlay('LEVEL COMPLETE!', sub, state.levelScore);
+  } else if (state.phase === 'GAME_OVER') {
+    const isFinished = state.levelIndex >= LEVELS.length - 1;
+    drawOverlay(
+      isFinished ? 'COMPLETE!' : 'TIME\'S UP',
+      'Total score: ' + state.totalScore + '   Enter = restart   S = save PNG'
+    );
+  }
+
+  // Flash message after screenshot saved
+  if (state.flashMsg && state.flashTimer > 0) {
+    const alpha = Math.min(1, state.flashTimer / 0.4);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = C.true;
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(state.flashMsg, W / 2, H - 10);
+    ctx.restore();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// GAME LOOP
+// ═══════════════════════════════════════════════════════
+function gameLoop(ts) {
+  if (state.lastTimestamp === null) state.lastTimestamp = ts;
+  const dt = Math.min((ts - state.lastTimestamp) / 1000, 0.1);
+  state.lastTimestamp = ts;
+
+  if (state.phase === 'PLAYING') {
+    state.timeRemaining -= dt;
+    if (state.timeRemaining <= 0) {
+      state.timeRemaining = 0;
+      state.phase = 'GAME_OVER';
+    } else {
+      state.cursorTimer -= dt;
+      if (state.cursorTimer <= 0) advanceCursor();
+      const { output } = evaluateCircuit(LEVELS[state.levelIndex].circuit, buildInputMap());
+      const allSet = userPins.every(p => inputMap.has(pinKey(p.gateId, p.pinIndex)));
+      if (output && allSet) completedLevel();
+    }
+    refreshHUD();
+  } else if (state.phase === 'LEVEL_COMPLETE') {
+    state.completionDelay -= dt;
+    if (state.completionDelay <= 0) advanceLevel();
+  }
+
+  if (state.flashTimer > 0) state.flashTimer -= dt;
+
+  renderFrame();
+  requestAnimationFrame(gameLoop);
+}
+
+// ═══════════════════════════════════════════════════════
+// KEYBOARD INPUT
+// ═══════════════════════════════════════════════════════
+document.addEventListener('keydown', (e) => {
+  if (state.phase === 'PLAYING') {
+    if (e.key === '1' || e.key === 't' || e.key === 'T') { setCurrentInput(true);  advanceCursor(); }
+    if (e.key === '0' || e.key === 'f' || e.key === 'F') { setCurrentInput(false); advanceCursor(); }
+  } else if (state.phase === 'LEVEL_COMPLETE') {
+    // Any game key skips the countdown and starts the next level immediately
+    if (['1','0','t','T','f','F',' ','Enter'].includes(e.key)) advanceLevel();
+  } else if (state.phase === 'GAME_OVER') {
+    if (e.key === 'Enter' || e.key === ' ') {
+      state.totalScore = 0;
+      startLevel(0);
+    }
+    if (e.key === 's' || e.key === 'S') saveScreenshot();
+  }
+});
+
+function saveScreenshot() {
+  canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'logic-gates-' + state.totalScore + 'b.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    state.flashMsg = 'Screenshot saved!';
+    state.flashTimer = 2.5;
+  }, 'image/png');
+}
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+startLevel(0);
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
